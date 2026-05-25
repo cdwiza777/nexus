@@ -12,10 +12,10 @@ const PAIRS = [
   ['Voiture','Moto'],['Chien','Chat'],['Roi','Président'],
   ['Épée','Lance'],['Café','Thé'],['Tigre','Léopard'],
   ['Piscine','Lac'],['Bus','Tramway'],['Crayon','Stylo'],
-  ['Boulanger','Cuisinier'],['Tigre','Panthère'],['Rivière','Fleuve'],
-  ['Château fort','Palais'],['Glace','Neige'],['Soldat','Chevalier'],
-  ['Hibou','Aigle'],['Dauphin','Baleine'],['Rose','Tulipe'],
-  ['Tambour','Guitare'],['Manteau','Veste'],['Château','Manoir'],
+  ['Boulanger','Cuisinier'],['Rivière','Fleuve'],['Glace','Neige'],
+  ['Soldat','Chevalier'],['Hibou','Aigle'],['Rose','Tulipe'],
+  ['Tambour','Guitare'],['Manteau','Veste'],['Éléphant','Rhinocéros'],
+  ['Sorcier','Magicien'],['Bateau','Navire'],['Ballon','Balle'],
 ]
 
 function genCode() {
@@ -32,7 +32,8 @@ export default function Home() {
   const [winMode, setWinMode] = useState('manches')
   const [targetManches, setTargetManches] = useState(5)
   const [targetScore, setTargetScore] = useState(10)
-  const [spyMode, setSpyMode] = useState('knows') // 'knows' | 'blind'
+  const [spyMode, setSpyMode] = useState('knows')
+  const [timerSeconds, setTimerSeconds] = useState(30)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -45,32 +46,22 @@ export default function Home() {
 
     const { error: e1 } = await supabase.from('rooms').insert({
       id: code,
-      citizen_word: pair[0],
-      spy_word: pair[1],
-      spy_index: spyIndex,
-      words_per_player: wordsPerPlayer,
-      total_rounds: wordsPerPlayer,
-      max_players: maxPlayers,
-      current_round: 0,
-      current_player: 0,
-      phase: 'lobby',
-      votes: {},
-      scores: {},
-      win_mode: winMode,
-      target_manches: targetManches,
-      target_score: targetScore,
-      manche_number: 1,
-      session_over: false,
-      spy_mode: spyMode,
+      citizen_word: pair[0], spy_word: pair[1], spy_index: spyIndex,
+      words_per_player: wordsPerPlayer, total_rounds: wordsPerPlayer,
+      max_players: maxPlayers, current_round: 0, current_player: 0,
+      phase: 'lobby', votes: {}, scores: {},
+      win_mode: winMode, target_manches: targetManches, target_score: targetScore,
+      manche_number: 1, session_over: false, spy_mode: spyMode,
+      timer_seconds: timerSeconds,
       used_pairs: [pair[0] + '|' + pair[1]],
     })
     if (e1) { setError('Erreur room: ' + e1.message); setLoading(false); return }
 
     const { error: e2 } = await supabase.from('players').insert({
-      room_id: code, name: name.trim(), player_index: 0, words: [], ready: false, score: 0,
+      room_id: code, name: name.trim(), player_index: 0,
+      words: [], ready: false, score: 0, last_seen: new Date().toISOString(),
     })
     if (e2) { setError('Erreur player: ' + e2.message); setLoading(false); return }
-
     router.push(`/room/${code}?p=0&n=${encodeURIComponent(name.trim())}`)
   }
 
@@ -79,21 +70,18 @@ export default function Home() {
     if (!joinCode.trim()) { setError('Entre le code !'); return }
     setLoading(true); setError('')
     const code = joinCode.trim().toUpperCase()
-
     const { data: room, error: re } = await supabase.from('rooms').select('*').eq('id', code).single()
     if (re || !room) { setError('Salle introuvable : ' + (re?.message || '')); setLoading(false); return }
     if (room.phase !== 'lobby') { setError('Partie déjà commencée'); setLoading(false); return }
-
     const { data: existing, error: ee } = await supabase.from('players').select('*').eq('room_id', code)
     if (ee) { setError('Erreur joueurs: ' + ee.message); setLoading(false); return }
     if (existing.length >= room.max_players) { setError('Salle pleine !'); setLoading(false); return }
-
     const idx = existing.length
     const { error: e2 } = await supabase.from('players').insert({
-      room_id: code, name: name.trim(), player_index: idx, words: [], ready: false, score: 0,
+      room_id: code, name: name.trim(), player_index: idx,
+      words: [], ready: false, score: 0, last_seen: new Date().toISOString(),
     })
     if (e2) { setError('Erreur insertion: ' + e2.message); setLoading(false); return }
-
     router.push(`/room/${code}?p=${idx}&n=${encodeURIComponent(name.trim())}`)
   }
 
@@ -136,15 +124,12 @@ export default function Home() {
         </button>
         <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#0f1629', marginBottom: '4px' }}>Nouvelle salle</h2>
         <p style={{ fontSize: '14px', color: '#6b7390', marginBottom: '20px' }}>Configure ta partie et partage le code.</p>
-
         <div style={S.card}>
-          {/* Pseudo */}
           <label style={S.label}>Ton pseudo</label>
           <input style={S.input} value={name} onChange={e => setName(e.target.value)}
             placeholder="Entre ton pseudo..." autoFocus
             onKeyDown={e => e.key === 'Enter' && createRoom()} />
 
-          {/* Joueurs + indices */}
           <div style={{ display: 'flex', gap: '12px' }}>
             <div style={{ flex: 1 }}>
               <label style={S.label}>Joueurs</label>
@@ -160,28 +145,40 @@ export default function Home() {
             </div>
           </div>
           <p style={{ fontSize: '11px', color: '#9aa0b8', marginTop: '5px' }}>
-            Chaque joueur donnera {wordsPerPlayer} mot{wordsPerPlayer > 1 ? 's' : ''} un par un, à tour de rôle
+            Chaque joueur donnera {wordsPerPlayer} mot{wordsPerPlayer > 1 ? 's' : ''} à tour de rôle
+          </p>
+
+          {/* Timer */}
+          <label style={S.label}>Temps par indice</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {[20, 30, 45, 60].map(n => (
+              <button key={n} onClick={() => setTimerSeconds(n)}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', border: timerSeconds === n ? '2px solid #1a56f0' : '1px solid #e2e5ef', background: timerSeconds === n ? '#e8effe' : 'white', color: timerSeconds === n ? '#0e3fc2' : '#6b7390', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+                {n}s
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: '11px', color: '#9aa0b8', marginTop: '5px' }}>
+            Si le temps est écoulé, le tour passe automatiquement
           </p>
 
           {/* Mode imposteur */}
           <label style={S.label}>Mode imposteur</label>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={() => setSpyMode('knows')}
-              style={{ flex: 1, padding: '10px 8px', borderRadius: '8px', border: spyMode === 'knows' ? '2px solid #1a56f0' : '1px solid #e2e5ef', background: spyMode === 'knows' ? '#e8effe' : 'white', color: spyMode === 'knows' ? '#0e3fc2' : '#6b7390', fontWeight: '600', fontSize: '12px', cursor: 'pointer', textAlign: 'center' }}>
+              style={{ flex: 1, padding: '10px 8px', borderRadius: '8px', border: spyMode === 'knows' ? '2px solid #1a56f0' : '1px solid #e2e5ef', background: spyMode === 'knows' ? '#e8effe' : 'white', color: spyMode === 'knows' ? '#0e3fc2' : '#6b7390', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>
               Sait qu'il est imposteur
             </button>
             <button onClick={() => setSpyMode('blind')}
-              style={{ flex: 1, padding: '10px 8px', borderRadius: '8px', border: spyMode === 'blind' ? '2px solid #e02d2d' : '1px solid #e2e5ef', background: spyMode === 'blind' ? '#fcebeb' : 'white', color: spyMode === 'blind' ? '#a32d2d' : '#6b7390', fontWeight: '600', fontSize: '12px', cursor: 'pointer', textAlign: 'center' }}>
-              Ne sait pas (aveugle)
+              style={{ flex: 1, padding: '10px 8px', borderRadius: '8px', border: spyMode === 'blind' ? '2px solid #e02d2d' : '1px solid #e2e5ef', background: spyMode === 'blind' ? '#fcebeb' : 'white', color: spyMode === 'blind' ? '#a32d2d' : '#6b7390', fontWeight: '600', fontSize: '12px', cursor: 'pointer' }}>
+              Mode aveugle
             </button>
           </div>
           <p style={{ fontSize: '11px', color: '#9aa0b8', marginTop: '4px' }}>
-            {spyMode === 'knows'
-              ? 'L\'imposteur sait son rôle et bluff consciemment'
-              : 'L\'imposteur reçoit juste un mot différent — plus déstabilisant'}
+            {spyMode === 'knows' ? "L'imposteur sait son rôle et bluff" : "L'imposteur reçoit juste un mot différent"}
           </p>
 
-          {/* Condition de victoire */}
+          {/* Condition victoire */}
           <label style={S.label}>Condition de victoire</label>
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
             {[['manches', 'Manches'], ['score', 'Score cible']].map(([val, label]) => (
@@ -191,7 +188,6 @@ export default function Home() {
               </button>
             ))}
           </div>
-
           {winMode === 'manches' ? (
             <div>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -214,7 +210,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <p style={{ fontSize: '11px', color: '#9aa0b8', marginTop: '6px' }}>Premier à {targetScore} pts gagne la session</p>
+              <p style={{ fontSize: '11px', color: '#9aa0b8', marginTop: '6px' }}>Premier à {targetScore} pts gagne</p>
             </div>
           )}
 
